@@ -103,7 +103,6 @@ void paddle_drawer(void *parameter){
     //eraser
     uint8_t eraser[MAX_SPEED*paddle_HEIGHT] = {0};
     
-    position old = {0};
     while (1)
     {
         vTaskDelay(20/portTICK_PERIOD_MS);
@@ -196,7 +195,7 @@ void ballDirections(void* parameter){
         if(ball_position.y+(BALL_DIMENTION/2) >= SCREEN_HEIGHT-paddle_HEIGHT) {
             xQueuePeek(paddle_postion,(void *)&local_paddle,portMAX_DELAY);
 
-            if(local_paddle.x+paddle_WIDTH>=ball_position.x+(BALL_DIMENTION/2) && local_paddle.x-(BALL_DIMENTION/2)<=ball_position.x ){
+            if(local_paddle.x+paddle_WIDTH>=ball_position.x-(BALL_DIMENTION/2) && local_paddle.x-(BALL_DIMENTION/2)<=ball_position.x ){
                 xQueuePeek(paddle_speed_queue,(void *)&paddle_speed,portMAX_DELAY);
                 x_speed += 0.25*paddle_speed;      //add an effect to the paddle speed to the ball speed
                 y_speed = -y_speed;
