@@ -2,13 +2,17 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "driver/adc.h"
-#include "ssd1306.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <driver/adc.h>
+#include <ssd1306.h>
 #include <math.h>
 #include <time.h>
 #include <esp_random.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include <nvs_flash.h>
+
 
 #define PI 3.14
 
@@ -39,7 +43,7 @@ typedef struct
 {
     int x;
     int y;
-}position;
+}position_t;
 
 
 SSD1306_t dev;
@@ -88,10 +92,10 @@ void paddleDirection(void * parameter){
 
 
 
-void paddle_drawer(void *parameter){
+void paddleDrawer(void *parameter){
     int paddle_speed = 0;
-    position local_paddle = {0};
-    paddle_postion = xQueueCreate(1,sizeof(position));
+    position_t local_paddle = {0};
+    paddle_postion = xQueueCreate(1,sizeof(position_t));
     //initial postiotns
     local_paddle.x = (SCREEN_WIDTH-paddle_WIDTH)/2;
     local_paddle.y = SCREEN_HEIGHT-paddle_HEIGHT;
@@ -102,7 +106,7 @@ void paddle_drawer(void *parameter){
     xSemaphoreGive(screen);
     //eraser
     uint8_t eraser[MAX_SPEED*paddle_HEIGHT] = {0};
-    
+    position_t old = {0};
     while (1)
     {
         vTaskDelay(20/portTICK_PERIOD_MS);
@@ -110,7 +114,7 @@ void paddle_drawer(void *parameter){
         //xQueueReceive(paddle_speed_queue,(void *)&paddle_speed,portMAX_DELAY);      //get the paddle speed
         xQueuePeek(paddle_speed_queue,(void *)&paddle_speed,portMAX_DELAY);
         old.x = local_paddle.x;           //save paddle old postion
-        local_paddle.x += paddle_speed;     //updating local paddle position
+        local_paddle.x += paddle_speed;     //updating local paddle position_t
 
         if(local_paddle.x>(SCREEN_WIDTH-paddle_WIDTH)){     //ensure that paddle stays within screen boundiries
             local_paddle.x = SCREEN_WIDTH-paddle_WIDTH;
@@ -147,7 +151,7 @@ void paddle_drawer(void *parameter){
 
 //This task controls the ball
 void ballDirections(void* parameter){
-    position ball_position, old_ball_position, local_paddle;    
+    position_t ball_position_t, old_ball_position_t, local_paddle;    
     bool start = true,local_player_lost = true,bt_player_lost = false;
     int x_speed=0,y_speed=0;
     unsigned int seed = esp_random();
@@ -159,12 +163,12 @@ void ballDirections(void* parameter){
         vTaskDelay(20/portTICK_PERIOD_MS);
 
         if( start || local_player_lost || bt_player_lost){
-            ball_position.x = (SCREEN_WIDTH-BALL_DIMENTION)/2;
-            ball_position.y = (SCREEN_HEIGHT-BALL_DIMENTION)/2;
+            ball_position_t.x = (SCREEN_WIDTH-BALL_DIMENTION)/2;
+            ball_position_t.y = (SCREEN_HEIGHT-BALL_DIMENTION)/2;
             xSemaphoreTake(screen,portMAX_DELAY);
-            _ssd1306_circle(&dev, ball_position.x, ball_position.y, BALL_DIMENTION/2, false);
+            _ssd1306_circle(&dev, ball_position_t.x, ball_position_t.y, BALL_DIMENTION/2, false);
             if(local_player_lost || bt_player_lost){
-                _ssd1306_circle(&dev, old_ball_position.x, old_ball_position.y, BALL_DIMENTION/2, true);
+                _ssd1306_circle(&dev, old_ball_position_t.x, old_ball_position_t.y, BALL_DIMENTION/2, true);
             }
             ssd1306_show_buffer(&dev);
             xSemaphoreGive(screen);
@@ -186,16 +190,16 @@ void ballDirections(void* parameter){
             local_player_lost = false;
             bt_player_lost = false;
         }
-        old_ball_position = ball_position;
-        ball_position.x+=x_speed;
-        ball_position.y+=y_speed;
+        old_ball_position_t = ball_position_t;
+        ball_position_t.x+=x_speed;
+        ball_position_t.y+=y_speed;
 
         //collisions
         
-        if(ball_position.y+(BALL_DIMENTION/2) >= SCREEN_HEIGHT-paddle_HEIGHT) {
+        if(ball_position_t.y+(BALL_DIMENTION/2) >= SCREEN_HEIGHT-paddle_HEIGHT) {
             xQueuePeek(paddle_postion,(void *)&local_paddle,portMAX_DELAY);
 
-            if(local_paddle.x+paddle_WIDTH>=ball_position.x-(BALL_DIMENTION/2) && local_paddle.x-(BALL_DIMENTION/2)<=ball_position.x ){
+            if(local_paddle.x+paddle_WIDTH>=ball_position_t.x-(BALL_DIMENTION/2) && local_paddle.x-(BALL_DIMENTION/2)<=ball_position_t.x ){
                 xQueuePeek(paddle_speed_queue,(void *)&paddle_speed,portMAX_DELAY);
                 x_speed += 0.25*paddle_speed;      //add an effect to the paddle speed to the ball speed
                 y_speed = -y_speed;
@@ -203,20 +207,20 @@ void ballDirections(void* parameter){
                 local_player_lost = true;
             }
         }
-        if(ball_position.y == 0){
+        if(ball_position_t.y == 0){
             y_speed = -y_speed;
         }
-        if(ball_position.x+BALL_DIMENTION/2 >= SCREEN_WIDTH || ball_position.x-(BALL_DIMENTION/2) <= 0) {
+        if(ball_position_t.x+BALL_DIMENTION/2 >= SCREEN_WIDTH || ball_position_t.x-(BALL_DIMENTION/2) <= 0) {
            x_speed = -x_speed;
         }
         
         xSemaphoreTake(screen,portMAX_DELAY);
         if(local_player_lost || bt_player_lost){
-            _ssd1306_circle(&dev, ball_position.x, ball_position.y, BALL_DIMENTION/2, true);
+            _ssd1306_circle(&dev, ball_position_t.x, ball_position_t.y, BALL_DIMENTION/2, true);
         }else{
-            _ssd1306_circle(&dev, ball_position.x, ball_position.y, BALL_DIMENTION/2, false);
+            _ssd1306_circle(&dev, ball_position_t.x, ball_position_t.y, BALL_DIMENTION/2, false);
         }
-        _ssd1306_circle(&dev, old_ball_position.x, old_ball_position.y, BALL_DIMENTION/2, true);
+        _ssd1306_circle(&dev, old_ball_position_t.x, old_ball_position_t.y, BALL_DIMENTION/2, true);
         ssd1306_show_buffer(&dev);
         xSemaphoreGive(screen);
 
@@ -224,16 +228,88 @@ void ballDirections(void* parameter){
     
 }
 
+static uint8_t peer_mac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+typedef enum{
+    BALL_POSITION,BT_PADDLE_POSITION,LOCAL_PADDLE_POSITION
+}esp_now_data_type_t;
+
+typedef struct{
+    esp_now_data_type_t type;
+    position_t position;
+}esp_now_data_t;
+
+void wifiInit() {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+void esp_now_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status) {
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        printf("\nData sent successfully");
+    } else {
+        printf("\nData send failed");
+    }
+}
+
+void esp_now_recv_cb(const uint8_t *mac, const uint8_t *data, int len) {
+    if (len == sizeof(esp_now_data_t)) {
+        esp_now_data_t *received_data = (esp_now_data_t *)data;
+        switch (received_data->type)
+        {
+        case BALL_POSITION:
+            /* code */
+            break;
+        case BT_PADDLE_POSITION:        //only needed in the game server
+            /* code */
+            break;
+        case LOCAL_PADDLE_POSITION:     //no need for this case since no esp will recive its own paddle position
+            /* code */
+            break;
+        default:
+            break;
+        }
+    } else {
+        printf("\nInvalid data length");
+    }
+}
+
+void espNowInit(){
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_send_cb(esp_now_send_cb));
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(esp_now_recv_cb));                                        
+    esp_now_peer_info_t peer_info = {       //add peer
+        .channel = 1,
+        .encrypt = false,  //disable encryption for simplicity
+    };
+    memcpy(peer_info.peer_addr, peer_mac, 6);
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
+}
 
 void app_main(void)
 {
+    ESP_ERROR_CHECK(nvs_flash_init());
+    wifiInit();
+    //temporary code just to get the mac address of the esp32
+    //
+    uint8_t mac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    printf("MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    //
+    //
+    espNowInit();
     vSemaphoreCreateBinary(screen);
     i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
     ssd1306_init(&dev, 128, 64); 
     ssd1306_contrast(&dev, 0xff);
     ssd1306_clear_screen(&dev, false);
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_send_cb(esp_now_send_cb));
     xTaskCreate(paddleDirection,"paddleDirection",4096,NULL,1,NULL);
-    xTaskCreate(paddle_drawer,"paddle_drawer",4096,NULL,1,NULL);
+    xTaskCreate(paddleDrawer,"paddleDrawer",4096,NULL,1,NULL);
     xTaskCreate(ballDirections,"ballDirections",4096,NULL,1,NULL);
 }
